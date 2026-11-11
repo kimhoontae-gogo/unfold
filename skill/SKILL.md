@@ -1,54 +1,85 @@
 ---
 name: unfold
-description: 기능을 구현하기 전에 "무엇을 어디까지 만들지"를 펼쳐 보는 흐름 그래프로 사용자와 합의한다. 대략적인 흐름부터 보여주고, 사용자가 궁금한 노드만 눌러 안쪽을 확인하며, 요청한 것과 AI가 가정하거나 추가한 것이 색으로 구분된다. 사용자가 기능 구현을 요청하면서 범위나 깊이를 먼저 맞추고 싶어 할 때, "unfold", "scope 잡자", "기능 정의부터"라고 할 때, 또는 확정된 scope 문서를 다시 보거나 고치려 할 때 사용한다.
+description: Before implementing a feature, agree with the user on what it does by writing a short scope document made of sequence diagrams, with what the AI assumed or added marked apart from what was requested. Use when the user wants to settle scope first, says "unfold" or "scope this", or wants to view or change an existing scope document.
 ---
 
 # unfold
 
-기능 요청을 받으면 에이전트는 요청보다 깊게 구현하기 쉽고, 사용자는 긴 설계 문서를 다 읽지 못한 채 승인하기 쉽다. unfold는 그 사이에 한 단계를 둔다. 구현할 동작을 그래프 문서로 쓰고, 사용자가 브라우저에서 필요한 곳만 펼쳐 보며 범위를 정한 뒤, 확정된 문서를 기준으로 구현한다.
+Write what the feature does as sequence diagrams, fix it with the user in chat, and implement only what they confirm. No design or code before confirmation.
 
-단계는 둘이다.
+## Rules
 
-- 기능 정의(scope): 무엇을 하는지를 동작 흐름으로 정한다. `scope/GUIDE.md`를 읽고 따른다.
-- 구현 설계(design): 확정된 기능을 어떤 구조로 만들지 정한다. 아직 제공되지 않는다. 사용자가 요청하면 그렇다고 알리고, 설계는 평소 방식대로 하되 확정된 scope 문서를 기준으로 삼는다.
+- **File**: `specs/<feature-slug>/scope.md`, unless the project's instruction file names another place. Write in the user's language, including the template labels.
+- **Line**: one arrow, one sentence saying what the sender does, with concrete values ("issues a presigned URL valid for 15 minutes"). A category name like "Validation" is not a line; what gets checked goes in that line's rules.
+- **Scope, not design**: participants are users, our system (at most app and server), and external systems, five at most. Never name our own classes, functions, tables, or files. Technical terms the team uses (presigned URL, webhook) are fine.
+- **Origin**: mark `(assumed)` when you picked a value or detail the user did not state, `(added)` when the user did not ask for it at all. If you cannot point to the words in the request, it is one of the two.
+- **IDs**: flow `A`, line `A1`, rule `A1.a`, exception `A1.x`, line in an exception `A1.x1`. The user refers to them in chat, so never renumber or reuse one.
+- **Diagrams**: the main diagram shows only the normal path, about 5 to 10 lines. No `alt`, `opt`, or `loop`; each branch is an exception in its own `<details>`. Use `Note over` for time gaps. No `autonumber`, and no semicolons or `#` in message text.
 
-기능 정의가 확정되기 전에는 설계나 구현을 시작하지 않는다. 깎일 수 있는 기능을 설계하는 데 시간을 쓰지 않기 위해서다.
+## Template
 
-## 문서 위치
+````markdown
+# <Feature name>
 
-문서는 프로젝트 안에 JSON 파일로 저장하고 git으로 관리한다. 화면은 이 파일을 읽어 그릴 뿐이므로 언제든 다시 볼 수 있다.
+- Status: draft
+- Request: "<quoted as given>"
 
-`AGENTS.md`나 `CLAUDE.md` 같은 프로젝트 지침 파일에 unfold 문서 위치가 지정되어 있으면 그곳을 쓴다. 없으면 `specs/<기능 이름>/scope.json`에 둔다. 기능 이름은 영문 소문자와 하이픈으로 짓는다(예: `specs/resource-upload/scope.json`).
+## Check these first
 
-## 명령
+| ID | What | Origin |
+|---|---|---|
+| A2.a | The same subscription is charged at most once a day | assumed |
 
-스크립트는 이 스킬 폴더의 `scripts/unfold.mjs`이고 Node로 실행한다.
+## Flow A. <what starts it and what it achieves>
 
+4 lines · 1 assumed
+
+```mermaid
+sequenceDiagram
+    participant S as Server
+    participant P as Payment provider
+    Note over S,P: At 00:00 on the renewal date
+    S->>P: A1. Requests payment with the saved card
+    P->>S: A2. Returns the payment result
 ```
-node <스킬 폴더>/scripts/unfold.mjs check <파일>          형식과 규칙을 검사한다
-node <스킬 폴더>/scripts/unfold.mjs done <파일>           작성이나 수정을 마쳤다고 알린다. 새 리비전이 되어 화면에 반영된다
-node <스킬 폴더>/scripts/unfold.mjs view <파일>           뷰어를 띄우고 브라우저에서 연다
-node <스킬 폴더>/scripts/unfold.mjs revert <파일> <번호>  지정한 리비전의 내용으로 되돌린다
-node <스킬 폴더>/scripts/unfold.mjs confirm <파일>        확정한다. 이전 리비전은 모두 지워진다
-node <스킬 폴더>/scripts/unfold.mjs reopen <파일>         확정을 풀고 수정 중으로 돌린다
-node <스킬 폴더>/scripts/unfold.mjs md <파일>             읽기용 Markdown을 출력한다
-node <스킬 폴더>/scripts/unfold.mjs stop <파일>           뷰어를 끈다
+
+**Rules**
+
+- A2.a The same subscription is charged at most once a day (assumed)
+
+**Exceptions**
+
+<details>
+<summary>A2.x When the payment fails · 2 lines</summary>
+
+```mermaid
+sequenceDiagram
+    participant S as Server
+    participant P as Payment provider
+    S->>S: A2.x1. Puts the subscription on hold
+    Note over S,P: 1 day later
+    S->>P: A2.x2. Requests payment again
 ```
 
-## 작업본과 리비전
+</details>
 
-프로젝트의 JSON 파일은 작업본이다. 뷰어는 작업본을 바로 그리지 않고, `done`으로 마쳤다고 알린 시점의 사본(리비전)을 그린다. 그래서 문서를 여러 번에 나눠 고쳐도 사용자는 어중간한 중간 상태를 보지 않는다. 고치는 동안 화면에는 이전 리비전과 함께 "수정 중" 안내가 나오고, `done`을 실행하면 화면이 새 리비전(r1, r2, ...)으로 바뀌며 직전 리비전과 달라진 노드에 표시가 붙는다.
+## Done when
 
-- 문서를 쓰거나 고쳤으면 반드시 `done`을 실행한다. 실행하지 않으면 사용자는 바뀐 내용을 볼 수 없다.
-- `done`은 형식 오류가 있으면 리비전을 만들지 않는다. 오류를 고치고 다시 실행한다.
-- 뷰어는 한 번만 띄우면 된다. 이미 떠 있는 상태에서 `view`를 다시 실행하면 같은 주소를 돌려준다.
-- 리비전은 프로젝트 밖 임시 폴더에 있고 git에 들어가지 않는다. 확정하면 모두 지워지고 확정본만 남는다.
+- <an observable result>
 
-## 확정된 문서를 다룰 때
+## Left out
 
-확정된 문서는 사용자와의 합의다. 다음을 지킨다.
+- <considered but not included>: <why>
+````
 
-- 구현은 확정된 문서의 노드를 기준으로 한다. 문서에 없는 동작을 넣지 않고, `excluded`에 있는 것을 다시 들여오지 않는다.
-- 구현하다가 문서에 없는 동작이 필요해 보이면 멈추고 사용자에게 한 줄로 묻는다. 사용자가 범위를 바꾸겠다고 하면 `reopen`으로 수정 중으로 돌리고, 고친 뒤 다시 확정받는다.
-- `status`가 `confirmed`인 파일을 직접 고치지 않는다. 범위 변경이 항상 사용자의 확정을 거치게 하기 위해서다.
-- 사용자가 예전 문서를 보고 싶어 하면 `view`로 띄운다. 새로 만들 것은 없다.
+One flow per starting point. "Check these first" lists every assumed and added item. Counts cover everything inside the flow or exception.
+
+## Steps
+
+1. Read only what you need. Ask only if you cannot write the main flow without the answer; otherwise decide and mark it assumed.
+2. Write the whole document. Check origins, counts, and that every main diagram reads top to bottom on its own.
+3. Tell the user the file path and the assumed and added IDs. Do not paste the document into chat.
+4. Apply chat feedback in one pass and reply with the IDs you changed. An accepted item loses its mark; a dropped item moves to "Left out" if worth remembering.
+5. Confirm only when the user says so. First list every item still marked added and ask keep or drop. Then set `Status: confirmed (<date>)`.
+
+After confirmation, build only what the document says. If something else seems needed, stop and ask; never edit a confirmed document on your own.
