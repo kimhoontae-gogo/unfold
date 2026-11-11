@@ -5,6 +5,7 @@ import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { diff, validate } from '../scope/schema.ts';
 import type { ScopeDoc } from '../scope/schema.ts';
+import { commit, current, revision, same } from './revisions.ts';
 import { clearState, readState, writeState } from './state.ts';
 
 const IDLE_EXIT_MS = 30 * 60 * 1000;
@@ -29,12 +30,25 @@ export function loadDoc(file: string): { doc?: unknown; parseError?: string } {
 }
 
 function payload(file: string) {
-  const { doc, parseError } = loadDoc(file);
-  if (parseError) return { file, parseError };
-  const issues = validate(doc);
-  const ok = !issues.some((i) => i.level === 'error');
-  const prev = readState<ScopeDoc>(file, 'snapshot.json');
-  return { file, doc, issues, diff: ok && prev ? diff(prev, doc as ScopeDoc) : undefined };
+  const live = loadDoc(file);
+  let rev = current(file);
+  if (!rev) {
+    // 리비전이 없는 문서(git 에서 막 받았거나 임시 폴더가 비워진 경우)는 작업본이 멀쩡하면 그것을 r1 로 삼는다.
+    if (live.parseError) return { file, parseError: live.parseError };
+    const issues = validate(live.doc);
+    if (issues.some((i) => i.level === 'error')) return { file, doc: live.doc, issues };
+    rev = { n: commit(file, live.doc as ScopeDoc), doc: live.doc as ScopeDoc };
+  }
+  const prev = revision(file, rev.n - 1);
+  return {
+    file,
+    doc: rev.doc,
+    issues: validate(rev.doc),
+    diff: prev ? diff(prev, rev.doc) : undefined,
+    revision: rev.n,
+    // 작업본이 화면의 리비전과 다르면 에이전트가 고치는 중이다.
+    editing: live.parseError ? true : !same(live.doc, rev.doc),
+  };
 }
 
 export function serve(fileArg: string): void {
@@ -86,6 +100,9 @@ export function serve(fileArg: string): void {
         }
         res.writeHead(204).end();
       });
+    } else if (url === '/refresh' && req.method === 'POST') {
+      res.writeHead(204).end();
+      notify();
     } else if (url === '/stop' && req.method === 'POST') {
       res.writeHead(204).end();
       shutdown();
@@ -101,6 +118,7 @@ export function serve(fileArg: string): void {
       for (const c of clients) c.write('data: change\n\n');
     }, 80);
   };
+  // 작업본이 바뀌면 화면에 "수정 중" 표시를 띄우기 위해 지켜본다. 그래프 자체는 리비전이 올라갈 때만 바뀐다.
   // 에디터와 에이전트는 파일을 통째로 바꿔 쓰는 경우가 많아 파일이 아니라 폴더를 지켜본다.
   try {
     watch(dirname(file), (_event, name) => {

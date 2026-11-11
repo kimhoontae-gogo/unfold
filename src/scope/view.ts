@@ -24,13 +24,23 @@ function subtitle(doc: ScopeDoc, n: ScopeNode): string {
   return parts.join(' · ') || '끝 노드';
 }
 
+/** 펼치지 않은 노드 안쪽이 바뀐 경우에도 어디를 눌러 봐야 하는지 알 수 있게 부모에 표시한다. */
+function badge(id: string, changes?: Diff): string | undefined {
+  if (!changes) return undefined;
+  if (changes.added.includes(id)) return '신규';
+  if (changes.changed.includes(id)) return '변경';
+  const inside = (x: string) => x.startsWith(id + '.');
+  if ([...changes.added, ...changes.changed, ...changes.removed.map((r) => r.id)].some(inside)) return '안쪽 변경';
+  return undefined;
+}
+
 export function levelView(doc: ScopeDoc, parent: string, changes?: Diff): { nodes: NodeView[]; edges: EdgeView[] } {
   const nodes = childrenOf(doc.nodes, parent).map((n) => ({
     id: n.id,
     title: n.title,
     subtitle: subtitle(doc, n),
     className: `o-${n.origin}`,
-    badge: changes?.added.includes(n.id) ? '신규' : changes?.changed.includes(n.id) ? '변경' : undefined,
+    badge: badge(n.id, changes),
   }));
   const edges = edgesAt(doc.edges, parent).map((e) => {
     const notes = [e.when, e.kind === 'loop' ? '반복' : e.kind === 'parallel' ? '동시에' : ''].filter(Boolean);

@@ -10,6 +10,8 @@ interface Payload {
   parseError?: string;
   issues?: Issue[];
   diff?: Diff;
+  revision?: number;
+  editing?: boolean;
 }
 
 type Child = Node | string | false | undefined | null;
@@ -65,7 +67,9 @@ function render(): void {
       {},
       String(doc.feature ?? '이름 없는 기능'),
       h('span', { class: `pill${doc.status === 'confirmed' ? ' confirmed' : ''}` }, doc.status === 'confirmed' ? '확정됨' : '작성 중'),
+      data.revision ? h('span', { class: 'pill' }, `r${data.revision}`) : false,
     ),
+    data.editing && h('div', { class: 'issues editing' }, '에이전트가 문서를 고치는 중이다. 지금 화면은 이전 리비전이고, 수정이 끝나면 자동으로 바뀐다.'),
     h('p', { class: 'request' }, `요청: ${doc.request ?? ''}`),
     h(
       'div',
@@ -116,7 +120,7 @@ function render(): void {
     { class: 'lists' },
     list('완료 기준', doc.doneWhen ?? []),
     list('제외한 것', (doc.excluded ?? []).map((x) => `${x.title}: ${x.reason}`)),
-    list('이번 수정에서 삭제된 노드', (diff?.removed ?? []).map((r) => `${r.id} ${r.title}`)),
+    list('직전 리비전에서 삭제된 노드', (diff?.removed ?? []).map((r) => `${r.id} ${r.title}`)),
   );
   app.replaceChildren(header, ...sections, lists);
   if (scrollToLast) sections[sections.length - 1]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });

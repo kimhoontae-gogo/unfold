@@ -5,16 +5,18 @@ import { fileURLToPath } from 'node:url';
 import { toMarkdown } from '../scope/markdown.ts';
 import { validate } from '../scope/schema.ts';
 import type { Issue, ScopeDoc } from '../scope/schema.ts';
+import { commit, current, currentNumber, reset, revision, same } from './revisions.ts';
 import { loadDoc, serve } from './server.ts';
 import type { ServerInfo } from './server.ts';
-import { clearState, readState, writeState } from './state.ts';
+import { clearState, readState } from './state.ts';
 
 const USAGE = `unfold <명령> <scope.json>
 
-  view <파일> [--no-open]   뷰어를 띄우고 브라우저에서 연다. 파일이 바뀌면 화면이 따라 바뀐다
   check <파일>              형식과 규칙을 검사한다
-  snapshot <파일>           지금 상태를 비교 기준으로 잡는다. 이후 바뀐 노드가 화면에 표시된다
-  confirm <파일> [--force]  확정한다. 사용자가 아직 보지 않은 AI 추가 항목이 있으면 먼저 알린다
+  done <파일>               작성이나 수정을 마쳤다고 알린다. 새 리비전이 되어 화면에 반영된다
+  view <파일> [--no-open]   뷰어를 띄우고 브라우저에서 연다. 마지막 리비전을 보여준다
+  revert <파일> <번호>      지정한 리비전의 내용으로 되돌린다 (새 리비전으로 기록된다)
+  confirm <파일> [--force]  확정한다. 이전 리비전은 모두 지워진다
   reopen <파일>             확정을 풀고 수정 중으로 돌린다
   md <파일>                 읽기용 Markdown 을 출력한다
   stop <파일>               뷰어를 끈다
@@ -55,6 +57,12 @@ async function ping(info: ServerInfo | undefined, file: string): Promise<boolean
   }
 }
 
+/** 떠 있는 뷰어가 있으면 화면을 다시 그리게 한다. */
+async function refresh(file: string): Promise<void> {
+  const info = readState<ServerInfo>(file, 'server.json');
+  if (await ping(info, file)) await fetch(`http://127.0.0.1:${info!.port}/refresh`, { method: 'POST' }).catch(() => {});
+}
+
 async function view(file: string, open: boolean): Promise<void> {
   let info = readState<ServerInfo>(file, 'server.json');
   if (!(await ping(info, file))) {
@@ -76,9 +84,37 @@ async function view(file: string, open: boolean): Promise<void> {
   console.log(url);
 }
 
-function confirm(file: string, force: boolean): void {
+async function done(file: string): Promise<void> {
   const { doc, issues } = readValid(file);
   printIssues(issues);
+  if (doc.status === 'confirmed') fail('확정된 문서다. 고치려면 먼저 reopen 한다');
+  const rev = current(file);
+  if (rev && same(rev.doc, doc)) {
+    console.log(`바뀐 것이 없다. 화면은 r${rev.n} 그대로다`);
+    return;
+  }
+  const n = commit(file, doc);
+  await refresh(file);
+  console.log(`r${n} 으로 화면에 반영했다`);
+}
+
+async function revert(file: string, arg: string | undefined): Promise<void> {
+  const n = Number((arg ?? '').replace(/^r/, ''));
+  const target = revision(file, n);
+  if (!target) fail(`리비전 r${arg ?? ''} 이 없다. 지금은 r1 ~ r${currentNumber(file)} 까지 있다`);
+  if (readValid(file).doc.status === 'confirmed') fail('확정된 문서다. 고치려면 먼저 reopen 한다');
+  save(file, target);
+  const now = commit(file, target);
+  await refresh(file);
+  console.log(`r${n} 의 내용으로 되돌렸다 (r${now})`);
+}
+
+async function confirm(file: string, force: boolean): Promise<void> {
+  const { doc, issues } = readValid(file);
+  printIssues(issues);
+  if (doc.status === 'confirmed') fail('이미 확정된 문서다');
+  const rev = current(file);
+  if (!rev || !same(rev.doc, doc)) fail('화면에 반영되지 않은 수정이 있다. 먼저 done 을 실행해 사용자가 최신 내용을 보게 한다');
   if (!doc.doneWhen?.length) fail('오류  doneWhen: 확정하려면 완료 기준이 한 줄 이상 필요하다');
   const seen = new Set(readState<string[]>(file, 'seen.json') ?? []);
   const unseen = doc.nodes.filter((n) => n.origin === 'added' && !seen.has(n.id));
@@ -91,12 +127,13 @@ function confirm(file: string, force: boolean): void {
   doc.status = 'confirmed';
   doc.confirmedAt = new Date().toISOString();
   save(file, doc);
-  clearState(file, 'snapshot.json');
-  console.log(`확정했다: ${doc.feature} (노드 ${doc.nodes.length}개)`);
+  reset(file, doc);
+  await refresh(file);
+  console.log(`확정했다: ${doc.feature} (노드 ${doc.nodes.length}개). 이전 리비전은 지웠다`);
 }
 
 async function main(): Promise<void> {
-  const [command, fileArg, ...flags] = process.argv.slice(2);
+  const [command, fileArg, ...rest] = process.argv.slice(2);
   if (!command || !fileArg) fail(USAGE);
   const file = resolve(fileArg);
 
@@ -104,7 +141,7 @@ async function main(): Promise<void> {
     case 'serve':
       return serve(file);
     case 'view':
-      return view(file, !flags.includes('--no-open'));
+      return view(file, !rest.includes('--no-open'));
     case 'check': {
       const { doc, parseError } = loadDoc(file);
       if (parseError) fail(parseError);
@@ -114,24 +151,21 @@ async function main(): Promise<void> {
       console.log(errors ? `오류 ${errors}개` : `통과 (경고 ${issues.length}개)`);
       process.exit(errors ? 1 : 0);
     }
-    case 'snapshot': {
-      const { doc } = readValid(file);
-      writeState(file, 'snapshot.json', doc);
-      // 파일을 건드리지 않고도 열려 있는 화면이 변경 표시를 다시 계산하도록 저장만 다시 한다.
-      save(file, doc);
-      console.log('비교 기준을 잡았다');
-      return;
-    }
+    case 'done':
+      return done(file);
+    case 'revert':
+      return revert(file, rest[0]);
     case 'confirm':
-      return confirm(file, flags.includes('--force'));
+      return confirm(file, rest.includes('--force'));
     case 'reopen': {
       const { doc } = readValid(file);
       if (doc.status !== 'confirmed') fail('이미 수정 중이다');
-      writeState(file, 'snapshot.json', doc);
       doc.status = 'draft';
       delete doc.confirmedAt;
       save(file, doc);
-      console.log('수정 중으로 돌렸다. 이후 바뀐 노드가 화면에 표시된다');
+      commit(file, doc);
+      await refresh(file);
+      console.log('수정 중으로 돌렸다');
       return;
     }
     case 'md':

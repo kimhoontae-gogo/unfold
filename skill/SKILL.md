@@ -25,16 +25,24 @@ description: 기능을 구현하기 전에 "무엇을 어디까지 만들지"를
 스크립트는 이 스킬 폴더의 `scripts/unfold.mjs`이고 Node로 실행한다.
 
 ```
-node <스킬 폴더>/scripts/unfold.mjs view <파일>       뷰어를 띄우고 브라우저에서 연다
-node <스킬 폴더>/scripts/unfold.mjs check <파일>      형식과 규칙을 검사한다
-node <스킬 폴더>/scripts/unfold.mjs snapshot <파일>   지금 상태를 비교 기준으로 잡는다
-node <스킬 폴더>/scripts/unfold.mjs confirm <파일>    확정한다
-node <스킬 폴더>/scripts/unfold.mjs reopen <파일>     확정을 풀고 수정 중으로 돌린다
-node <스킬 폴더>/scripts/unfold.mjs md <파일>         읽기용 Markdown을 출력한다
-node <스킬 폴더>/scripts/unfold.mjs stop <파일>       뷰어를 끈다
+node <스킬 폴더>/scripts/unfold.mjs check <파일>          형식과 규칙을 검사한다
+node <스킬 폴더>/scripts/unfold.mjs done <파일>           작성이나 수정을 마쳤다고 알린다. 새 리비전이 되어 화면에 반영된다
+node <스킬 폴더>/scripts/unfold.mjs view <파일>           뷰어를 띄우고 브라우저에서 연다
+node <스킬 폴더>/scripts/unfold.mjs revert <파일> <번호>  지정한 리비전의 내용으로 되돌린다
+node <스킬 폴더>/scripts/unfold.mjs confirm <파일>        확정한다. 이전 리비전은 모두 지워진다
+node <스킬 폴더>/scripts/unfold.mjs reopen <파일>         확정을 풀고 수정 중으로 돌린다
+node <스킬 폴더>/scripts/unfold.mjs md <파일>             읽기용 Markdown을 출력한다
+node <스킬 폴더>/scripts/unfold.mjs stop <파일>           뷰어를 끈다
 ```
 
-뷰어는 파일을 지켜보다가 바뀌면 화면을 다시 그린다. 그래서 문서를 고친 뒤 뷰어를 다시 띄울 필요가 없다. 이미 떠 있는 상태에서 `view`를 다시 실행하면 같은 주소를 돌려준다.
+## 작업본과 리비전
+
+프로젝트의 JSON 파일은 작업본이다. 뷰어는 작업본을 바로 그리지 않고, `done`으로 마쳤다고 알린 시점의 사본(리비전)을 그린다. 그래서 문서를 여러 번에 나눠 고쳐도 사용자는 어중간한 중간 상태를 보지 않는다. 고치는 동안 화면에는 이전 리비전과 함께 "수정 중" 안내가 나오고, `done`을 실행하면 화면이 새 리비전(r1, r2, ...)으로 바뀌며 직전 리비전과 달라진 노드에 표시가 붙는다.
+
+- 문서를 쓰거나 고쳤으면 반드시 `done`을 실행한다. 실행하지 않으면 사용자는 바뀐 내용을 볼 수 없다.
+- `done`은 형식 오류가 있으면 리비전을 만들지 않는다. 오류를 고치고 다시 실행한다.
+- 뷰어는 한 번만 띄우면 된다. 이미 떠 있는 상태에서 `view`를 다시 실행하면 같은 주소를 돌려준다.
+- 리비전은 프로젝트 밖 임시 폴더에 있고 git에 들어가지 않는다. 확정하면 모두 지워지고 확정본만 남는다.
 
 ## 확정된 문서를 다룰 때
 

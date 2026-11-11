@@ -195,12 +195,6 @@ function diff(prev, cur) {
   return { added, changed: [...changed], removed };
 }
 
-// src/cli/server.ts
-import { readFileSync as readFileSync2, watch } from "node:fs";
-import { createServer } from "node:http";
-import { basename, dirname, resolve as resolve2 } from "node:path";
-import { fileURLToPath } from "node:url";
-
 // src/cli/state.ts
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -212,21 +206,51 @@ function stateDir(file) {
   mkdirSync(dir, { recursive: true });
   return dir;
 }
-function readState(file, name) {
+function readState(file, name2) {
   try {
-    return JSON.parse(readFileSync(join(stateDir(file), name), "utf8"));
+    return JSON.parse(readFileSync(join(stateDir(file), name2), "utf8"));
   } catch {
     return void 0;
   }
 }
-function writeState(file, name, value) {
-  writeFileSync(join(stateDir(file), name), JSON.stringify(value));
+function writeState(file, name2, value) {
+  writeFileSync(join(stateDir(file), name2), JSON.stringify(value));
 }
-function clearState(file, name) {
-  rmSync(join(stateDir(file), name), { force: true });
+function clearState(file, name2) {
+  rmSync(join(stateDir(file), name2), { force: true });
 }
 
+// src/cli/revisions.ts
+var name = (n) => `r${n}.json`;
+function currentNumber(file) {
+  return readState(file, "meta.json")?.current ?? 0;
+}
+function revision(file, n) {
+  return n > 0 ? readState(file, name(n)) : void 0;
+}
+function current(file) {
+  const n = currentNumber(file);
+  const doc = revision(file, n);
+  return doc ? { n, doc } : void 0;
+}
+function commit(file, doc) {
+  const n = currentNumber(file) + 1;
+  writeState(file, name(n), doc);
+  writeState(file, "meta.json", { current: n });
+  return n;
+}
+function reset(file, doc) {
+  for (let n = currentNumber(file); n > 0; n--) clearState(file, name(n));
+  writeState(file, name(1), doc);
+  writeState(file, "meta.json", { current: 1 });
+}
+var same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
 // src/cli/server.ts
+import { readFileSync as readFileSync2, watch } from "node:fs";
+import { createServer } from "node:http";
+import { basename, dirname, resolve as resolve2 } from "node:path";
+import { fileURLToPath } from "node:url";
 var IDLE_EXIT_MS = 30 * 60 * 1e3;
 function loadDoc(file) {
   let text;
@@ -242,12 +266,24 @@ function loadDoc(file) {
   }
 }
 function payload(file) {
-  const { doc, parseError } = loadDoc(file);
-  if (parseError) return { file, parseError };
-  const issues = validate(doc);
-  const ok = !issues.some((i) => i.level === "error");
-  const prev = readState(file, "snapshot.json");
-  return { file, doc, issues, diff: ok && prev ? diff(prev, doc) : void 0 };
+  const live = loadDoc(file);
+  let rev = current(file);
+  if (!rev) {
+    if (live.parseError) return { file, parseError: live.parseError };
+    const issues = validate(live.doc);
+    if (issues.some((i) => i.level === "error")) return { file, doc: live.doc, issues };
+    rev = { n: commit(file, live.doc), doc: live.doc };
+  }
+  const prev = revision(file, rev.n - 1);
+  return {
+    file,
+    doc: rev.doc,
+    issues: validate(rev.doc),
+    diff: prev ? diff(prev, rev.doc) : void 0,
+    revision: rev.n,
+    // 작업본이 화면의 리비전과 다르면 에이전트가 고치는 중이다.
+    editing: live.parseError ? true : !same(live.doc, rev.doc)
+  };
 }
 function serve(fileArg) {
   const file = resolve2(fileArg);
@@ -295,6 +331,9 @@ function serve(fileArg) {
         }
         res.writeHead(204).end();
       });
+    } else if (url === "/refresh" && req.method === "POST") {
+      res.writeHead(204).end();
+      notify();
     } else if (url === "/stop" && req.method === "POST") {
       res.writeHead(204).end();
       shutdown();
@@ -310,8 +349,8 @@ function serve(fileArg) {
     }, 80);
   };
   try {
-    watch(dirname(file), (_event, name) => {
-      if (!name || name === basename(file)) notify();
+    watch(dirname(file), (_event, name2) => {
+      if (!name2 || name2 === basename(file)) notify();
     });
   } catch {
   }
@@ -331,10 +370,11 @@ function serve(fileArg) {
 // src/cli/main.ts
 var USAGE = `unfold <\uBA85\uB839> <scope.json>
 
-  view <\uD30C\uC77C> [--no-open]   \uBDF0\uC5B4\uB97C \uB744\uC6B0\uACE0 \uBE0C\uB77C\uC6B0\uC800\uC5D0\uC11C \uC5F0\uB2E4. \uD30C\uC77C\uC774 \uBC14\uB00C\uBA74 \uD654\uBA74\uC774 \uB530\uB77C \uBC14\uB010\uB2E4
   check <\uD30C\uC77C>              \uD615\uC2DD\uACFC \uADDC\uCE59\uC744 \uAC80\uC0AC\uD55C\uB2E4
-  snapshot <\uD30C\uC77C>           \uC9C0\uAE08 \uC0C1\uD0DC\uB97C \uBE44\uAD50 \uAE30\uC900\uC73C\uB85C \uC7A1\uB294\uB2E4. \uC774\uD6C4 \uBC14\uB010 \uB178\uB4DC\uAC00 \uD654\uBA74\uC5D0 \uD45C\uC2DC\uB41C\uB2E4
-  confirm <\uD30C\uC77C> [--force]  \uD655\uC815\uD55C\uB2E4. \uC0AC\uC6A9\uC790\uAC00 \uC544\uC9C1 \uBCF4\uC9C0 \uC54A\uC740 AI \uCD94\uAC00 \uD56D\uBAA9\uC774 \uC788\uC73C\uBA74 \uBA3C\uC800 \uC54C\uB9B0\uB2E4
+  done <\uD30C\uC77C>               \uC791\uC131\uC774\uB098 \uC218\uC815\uC744 \uB9C8\uCCE4\uB2E4\uACE0 \uC54C\uB9B0\uB2E4. \uC0C8 \uB9AC\uBE44\uC804\uC774 \uB418\uC5B4 \uD654\uBA74\uC5D0 \uBC18\uC601\uB41C\uB2E4
+  view <\uD30C\uC77C> [--no-open]   \uBDF0\uC5B4\uB97C \uB744\uC6B0\uACE0 \uBE0C\uB77C\uC6B0\uC800\uC5D0\uC11C \uC5F0\uB2E4. \uB9C8\uC9C0\uB9C9 \uB9AC\uBE44\uC804\uC744 \uBCF4\uC5EC\uC900\uB2E4
+  revert <\uD30C\uC77C> <\uBC88\uD638>      \uC9C0\uC815\uD55C \uB9AC\uBE44\uC804\uC758 \uB0B4\uC6A9\uC73C\uB85C \uB418\uB3CC\uB9B0\uB2E4 (\uC0C8 \uB9AC\uBE44\uC804\uC73C\uB85C \uAE30\uB85D\uB41C\uB2E4)
+  confirm <\uD30C\uC77C> [--force]  \uD655\uC815\uD55C\uB2E4. \uC774\uC804 \uB9AC\uBE44\uC804\uC740 \uBAA8\uB450 \uC9C0\uC6CC\uC9C4\uB2E4
   reopen <\uD30C\uC77C>             \uD655\uC815\uC744 \uD480\uACE0 \uC218\uC815 \uC911\uC73C\uB85C \uB3CC\uB9B0\uB2E4
   md <\uD30C\uC77C>                 \uC77D\uAE30\uC6A9 Markdown \uC744 \uCD9C\uB825\uD55C\uB2E4
   stop <\uD30C\uC77C>               \uBDF0\uC5B4\uB97C \uB048\uB2E4
@@ -368,6 +408,11 @@ async function ping(info, file) {
     return false;
   }
 }
+async function refresh(file) {
+  const info = readState(file, "server.json");
+  if (await ping(info, file)) await fetch(`http://127.0.0.1:${info.port}/refresh`, { method: "POST" }).catch(() => {
+  });
+}
 async function view(file, open) {
   let info = readState(file, "server.json");
   if (!await ping(info, file)) {
@@ -389,9 +434,35 @@ async function view(file, open) {
   }
   console.log(url);
 }
-function confirm(file, force) {
+async function done(file) {
   const { doc, issues } = readValid(file);
   printIssues(issues);
+  if (doc.status === "confirmed") fail("\uD655\uC815\uB41C \uBB38\uC11C\uB2E4. \uACE0\uCE58\uB824\uBA74 \uBA3C\uC800 reopen \uD55C\uB2E4");
+  const rev = current(file);
+  if (rev && same(rev.doc, doc)) {
+    console.log(`\uBC14\uB010 \uAC83\uC774 \uC5C6\uB2E4. \uD654\uBA74\uC740 r${rev.n} \uADF8\uB300\uB85C\uB2E4`);
+    return;
+  }
+  const n = commit(file, doc);
+  await refresh(file);
+  console.log(`r${n} \uC73C\uB85C \uD654\uBA74\uC5D0 \uBC18\uC601\uD588\uB2E4`);
+}
+async function revert(file, arg) {
+  const n = Number((arg ?? "").replace(/^r/, ""));
+  const target = revision(file, n);
+  if (!target) fail(`\uB9AC\uBE44\uC804 r${arg ?? ""} \uC774 \uC5C6\uB2E4. \uC9C0\uAE08\uC740 r1 ~ r${currentNumber(file)} \uAE4C\uC9C0 \uC788\uB2E4`);
+  if (readValid(file).doc.status === "confirmed") fail("\uD655\uC815\uB41C \uBB38\uC11C\uB2E4. \uACE0\uCE58\uB824\uBA74 \uBA3C\uC800 reopen \uD55C\uB2E4");
+  save(file, target);
+  const now = commit(file, target);
+  await refresh(file);
+  console.log(`r${n} \uC758 \uB0B4\uC6A9\uC73C\uB85C \uB418\uB3CC\uB838\uB2E4 (r${now})`);
+}
+async function confirm(file, force) {
+  const { doc, issues } = readValid(file);
+  printIssues(issues);
+  if (doc.status === "confirmed") fail("\uC774\uBBF8 \uD655\uC815\uB41C \uBB38\uC11C\uB2E4");
+  const rev = current(file);
+  if (!rev || !same(rev.doc, doc)) fail("\uD654\uBA74\uC5D0 \uBC18\uC601\uB418\uC9C0 \uC54A\uC740 \uC218\uC815\uC774 \uC788\uB2E4. \uBA3C\uC800 done \uC744 \uC2E4\uD589\uD574 \uC0AC\uC6A9\uC790\uAC00 \uCD5C\uC2E0 \uB0B4\uC6A9\uC744 \uBCF4\uAC8C \uD55C\uB2E4");
   if (!doc.doneWhen?.length) fail("\uC624\uB958  doneWhen: \uD655\uC815\uD558\uB824\uBA74 \uC644\uB8CC \uAE30\uC900\uC774 \uD55C \uC904 \uC774\uC0C1 \uD544\uC694\uD558\uB2E4");
   const seen = new Set(readState(file, "seen.json") ?? []);
   const unseen = doc.nodes.filter((n) => n.origin === "added" && !seen.has(n.id));
@@ -404,18 +475,19 @@ function confirm(file, force) {
   doc.status = "confirmed";
   doc.confirmedAt = (/* @__PURE__ */ new Date()).toISOString();
   save(file, doc);
-  clearState(file, "snapshot.json");
-  console.log(`\uD655\uC815\uD588\uB2E4: ${doc.feature} (\uB178\uB4DC ${doc.nodes.length}\uAC1C)`);
+  reset(file, doc);
+  await refresh(file);
+  console.log(`\uD655\uC815\uD588\uB2E4: ${doc.feature} (\uB178\uB4DC ${doc.nodes.length}\uAC1C). \uC774\uC804 \uB9AC\uBE44\uC804\uC740 \uC9C0\uC6E0\uB2E4`);
 }
 async function main() {
-  const [command, fileArg, ...flags] = process.argv.slice(2);
+  const [command, fileArg, ...rest] = process.argv.slice(2);
   if (!command || !fileArg) fail(USAGE);
   const file = resolve3(fileArg);
   switch (command) {
     case "serve":
       return serve(file);
     case "view":
-      return view(file, !flags.includes("--no-open"));
+      return view(file, !rest.includes("--no-open"));
     case "check": {
       const { doc, parseError } = loadDoc(file);
       if (parseError) fail(parseError);
@@ -425,23 +497,21 @@ async function main() {
       console.log(errors ? `\uC624\uB958 ${errors}\uAC1C` : `\uD1B5\uACFC (\uACBD\uACE0 ${issues.length}\uAC1C)`);
       process.exit(errors ? 1 : 0);
     }
-    case "snapshot": {
-      const { doc } = readValid(file);
-      writeState(file, "snapshot.json", doc);
-      save(file, doc);
-      console.log("\uBE44\uAD50 \uAE30\uC900\uC744 \uC7A1\uC558\uB2E4");
-      return;
-    }
+    case "done":
+      return done(file);
+    case "revert":
+      return revert(file, rest[0]);
     case "confirm":
-      return confirm(file, flags.includes("--force"));
+      return confirm(file, rest.includes("--force"));
     case "reopen": {
       const { doc } = readValid(file);
       if (doc.status !== "confirmed") fail("\uC774\uBBF8 \uC218\uC815 \uC911\uC774\uB2E4");
-      writeState(file, "snapshot.json", doc);
       doc.status = "draft";
       delete doc.confirmedAt;
       save(file, doc);
-      console.log("\uC218\uC815 \uC911\uC73C\uB85C \uB3CC\uB838\uB2E4. \uC774\uD6C4 \uBC14\uB010 \uB178\uB4DC\uAC00 \uD654\uBA74\uC5D0 \uD45C\uC2DC\uB41C\uB2E4");
+      commit(file, doc);
+      await refresh(file);
+      console.log("\uC218\uC815 \uC911\uC73C\uB85C \uB3CC\uB838\uB2E4");
       return;
     }
     case "md":
